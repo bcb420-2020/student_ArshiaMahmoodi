@@ -1,0 +1,200 @@
+---
+title: "Assignment 1"
+author: "Arshia Mahmoodi"
+output: html_document
+---
+
+## 1. Data set selection and Download
+
+### Selected dataset [GSE135511](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE135511)
+
+
+
+```{r package, message=FALSE}
+if (! requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+if (! requireNamespace("GEOquery", quietly = TRUE)) {
+    BiocManager::install("GEOquery")
+}
+if (!requireNamespace("GEOmetadb", quietly = TRUE)){
+    BiocManager::install("GEOmetadb")
+}
+if (!requireNamespace("edgeR", quietly = TRUE)){
+    BiocManager::install("edgeR")
+}
+```
+
+
+```{r, message=FALSE}
+library(GEOquery)
+
+gse_name <- "GSE135511_RAW.tar"
+
+if (!file.exists(gse_name)){
+  gse <- getGEO("GSE135511", GSEMatrix = FALSE)
+}
+
+current_gpl <- names(GPLList(gse))[1]
+current_gpl_info <- Meta(getGEO(current_gpl))
+```
+
+
+This data set is particularly interesting because not only does it document the pathological changes observed in grey matter in multiple sclerosis with augmented meningeal inflammation, but also demonstrates the actual pathways associated with this inflammatory response. This can be applied to genes involved in tumour signalling, which are are differentially regulated in multiple scleroris cases compared to the control.
+
+**Exiperiment title:** 	Transcriptional signature of Th17 cells expressing ICOS-based CARs
+
+**Platform title:** `r current_gpl_info$title`
+
+**Submission date** `r current_gpl_info$submission_date`
+
+**Last update date:** `r current_gpl_info$last_update_date`
+
+**Organisms:**  `r current_gpl_info$organism`
+
+**Number of GEO datasets that use this techology:** `r length(current_gpl_info$series_id)`
+
+**Number of GEO samples that use this technology:** `r length(current_gpl_info$sample_id)`
+
+
+## 2. Overview and Mapping
+
+```{r}
+library(knitr)
+
+sfiles = getGEOSuppFiles('GSE135511')
+
+fnames = rownames(sfiles)
+
+# Second supplementary file containing non-normalized data
+supp = read.delim(fnames[2],header=TRUE,
+                check.names = FALSE)
+#head(supp)
+kable(supp[1:10,1:5], format = "html")
+```
+
+Dimensions of the data:
+```{r}
+dim(supp)
+```
+
+## 3. Mapping
+
+We are observing 50 different motor-cortex tissue samples, 10 of which are non neurological control samples, derived from post-mortem multiple sclerosis brains.
+
+Across these samples, 22303 rows of gene expression recorded and their respective value and p-value documented. Hence, the study has very good coverage of the data.
+
+Each row identifer is a unique gene symbol, with the respective tested values across the 50 samples (10 control)
+
+## 4. Data Visualization before Normalization
+
+Boxplot of our data values
+
+```{r}
+Values <- seq(2, 101, 2)
+P_Values <- seq(3, 101, 2)
+
+supp_P_values <- supp[2:22303,P_Values]
+supp_values <- supp[2:22303,Values]
+
+data2plot <- log2(supp_values)
+boxplot(data2plot, xlab = "Tissue Samples", ylab = "log2", 
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "MS Tissue Samples and Control")
+
+abline(h = median(apply(data2plot, 2, median)), col = "red", lwd = 0.6, lty = "dashed")
+```
+
+Density Plot of the data P-Value distribution
+
+```{r}
+counts_density <- apply(log2(supp_P_values), 2, density)
+  #calculate the limits across all the samples
+    xlim <- 0; ylim <- 0
+    for (i in 1:length(counts_density)) {
+      xlim <- range(c(xlim, counts_density[[i]]$x)); 
+      ylim <- range(c(ylim, counts_density[[i]]$y))
+    }
+    cols <- rainbow(length(counts_density))
+    ltys <- rep(1, length(counts_density))
+    #plot the first density plot to initialize the plot
+    plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", 
+         ylab="Smoothing density of log2", main="", cex.lab = 0.85)
+    #plot each line
+    for (i in 1:length(counts_density)) lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+    #create legend
+    legend("topright", colnames(data2plot),  
+           col=cols, lty=ltys, cex=0.75, 
+           border ="blue",  text.col = "green4", 
+           merge = TRUE, bg = "gray90")
+```
+
+
+## 5. Normalizing the data
+
+Normalizing and plotting the density plot
+
+```{r}
+library(edgeR)
+
+filtered_data_matrix <- as.matrix(supp[2:2203,P_Values])
+#head(filtered_data_matrix)
+rownames(filtered_data_matrix) <- supp[2:2203,1]
+d = DGEList(counts=filtered_data_matrix, group=supp[1,P_Values])
+d = calcNormFactors(d)
+normalized_counts <- cpm(d)
+normalized_density <- apply(log2(normalized_counts[,2:50]), 2,density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(normalized_density)) {
+  xlim <- range(c(xlim, normalized_density[[i]]$x));
+  ylim <- range(c(ylim, normalized_density[[i]]$y))
+}
+cols <- rainbow(length(normalized_density))
+ltys <- rep(1, length(normalized_density))
+#plot the first density plot to initialize the plot
+plot(normalized_density[[1]], xlim=xlim, ylim=ylim, type="n",
+     ylab="Normalized density of log2", main="", cex.lab =
+       0.85)
+#plot each line
+for (i in 1:length(normalized_density)) lines(normalized_density[[i]],
+                                          col=cols[i], lty=ltys[i])
+#create legend
+legend("topleft",colnames(data2plot),
+       col=cols, lty=ltys, cex=0.55,
+       border ="blue", text.col = "green4",
+       merge = TRUE, bg = "gray90")
+```
+
+One thing we could consider is filtering values by a selected P-value threshhold specific to our experiment i,e P = 0.05 to remove non-significant results.
+
+
+Normalizing and plotting the Box-Plot of our values:
+
+```{r}
+filtered_data_matrix <- as.matrix(supp[2:2203,Values])
+#head(filtered_data_matrix)
+rownames(filtered_data_matrix) <- supp[2:2203,1]
+d = DGEList(counts=filtered_data_matrix, group=supp[1,P_Values])
+d = calcNormFactors(d)
+normalized_counts <- cpm(d)
+normalized_density <- apply(log2(normalized_counts[,2:50]), 2,density)
+
+data2plot <- log2(normalized_counts[,2:50])
+boxplot(data2plot, xlab = "Tissue Samples", ylab = "log2", 
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Normalized MS Tissue Samples and Control")
+
+abline(h = median(apply(data2plot, 2, median)), col = "red", lwd = 0.6, lty = "dashed")
+```
+
+No values were removed from the data set. Additionally the genes in the data set are unique, and documented for across the 50 conditions, hence the final coverage of the data set did not change and is 22303 rows of expression across 10 control and 40 tissue samples.
+
+
+## References
+
+1. Magliozzi R, Howell OW, Durrenberger P, Aricò E et al. Meningeal     inflammation changes the balance of TNF signalling in cortical grey matter in multiple sclerosis. J Neuroinflammation 2019 Dec 7;16(1):259. PMID: 31810488
+
+Note: R code for this report was written following lecture notes in BCB420
+
+
