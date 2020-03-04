@@ -1,0 +1,293 @@
+---
+title: "Assignment 2"
+author: "Arshia Mahmoodi"
+output: html_document
+---
+
+## Assignment 1 Summary
+
+### Selected dataset [GSE135511](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE135511)
+
+Working with a dataset that documents the pathological changes observed in grey matter in multiple sclerosis with augmented meningeal inflammation, but also demonstrates the actual pathways associated with this inflammatory response. This can be applied to genes involved in tumour signalling, which are are differentially regulated in multiple scleroris cases compared to the control.
+
+We are observing 50 different motor-cortex tissue samples, 10 of which are non neurological control samples, derived from post-mortem multiple sclerosis brains.
+
+Across these samples, 22303 rows of gene expression recorded and their respective value and p-value documented. Hence, the study has very good coverage of the data.
+
+Each row identifer is a unique gene symbol, with the respective tested values across the 50 samples (10 control)
+
+## Loading Required Packages
+
+
+```{r package, message=FALSE}
+
+if (! requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+
+if (! requireNamespace("GEOquery", quietly = TRUE)) {
+    BiocManager::install("GEOquery")
+}
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE)){
+    BiocManager::install("GEOmetadb")
+}
+
+if (!requireNamespace("edgeR", quietly = TRUE)){
+    BiocManager::install("edgeR")
+}
+if (!requireNamespace("ComplexHeatmap")) {
+  BiocManager::install("ComplexHeatmap")
+}
+if (!requireNamespace("circlize")) {
+  BiocManager::install("circlize")
+}
+```
+
+```{r, message=FALSE}
+library(GEOquery)
+
+gse_name <- "GSE135511_RAW.tar"
+
+if (!file.exists(gse_name)){
+  gse <- getGEO("GSE135511", GSEMatrix = FALSE)
+}
+
+current_gpl <- names(GPLList(gse))[1]
+current_gpl_info <- Meta(getGEO(current_gpl))
+```
+
+**Exiperiment title:** 	Transcriptional signature of Th17 cells expressing ICOS-based CARs
+
+**Platform title:** `r current_gpl_info$title`
+
+**Submission date** `r current_gpl_info$submission_date`
+
+**Last update date:** `r current_gpl_info$last_update_date`
+
+**Organisms:**  `r current_gpl_info$organism`
+
+**Number of GEO datasets that use this techology:** `r length(current_gpl_info$series_id)`
+
+**Number of GEO samples that use this technology:** `r length(current_gpl_info$sample_id)`
+
+## Regenerating the data from Assignment 1
+
+```{r, message=FALSE}
+library(knitr)
+
+sfiles = getGEOSuppFiles('GSE135511')
+
+fnames = rownames(sfiles)
+
+# Second supplementary file containing non-normalized data
+supp = read.delim(fnames[2],header=TRUE,
+                check.names = FALSE)
+#head(supp)
+kable(supp[1:10,1:10], format = "html")
+```
+
+Dimensions of the data:
+```{r}
+dim(supp)
+```
+
+## P Value Table
+
+```{r, message=FALSE}
+library(edgeR)
+P_Values <- seq(3, 101, 2)
+
+Values <- seq(2,101,2)
+
+cpms = edgeR::cpm(supp[,2:101])
+rownames(cpms) <- supp[,1]
+keep = rowSums(cpms >1) >=3
+supp_filtered = supp[keep,]
+
+filtered_data_matrix <- as.matrix(supp_filtered[,2:51])
+
+d = edgeR::DGEList(counts=filtered_data_matrix, group=supp[1,P_Values])
+
+P_Value_Table <- supp[, P_Values]
+Value_Table <-supp[,Values]
+
+kable(P_Value_Table[1:10,1:50], format = "html")
+
+```
+
+
+
+We will test the number of genes that pass a threshold of p = 0.05, as it is generally accepeted to be representative of significance. This value indicates that there is a <5% chance that are results could be obtained from chance.
+
+```{r, message=FALSE}
+
+sum(P_Value_Table < 0.05)
+
+```
+
+This is the total number of observations for all 22303 genes across all 50 samples that had a p_value score of less than 0.05.
+
+## Sampling and Multiple Hypothesis Testing
+
+The experiment is divided into 50 samples, but we can group them into two categories, being the control samples, MS brains with substantial inflammation, and MS brains without inflammation.
+
+```{r, message=FALSE}
+
+samples <- data.frame(lapply(colnames(Value_Table),
+                             FUN=function(x){unlist(strsplit(x, split = "\\_"))[c(2,3,4)]}))
+
+colnames(samples) <- colnames(Value_Table)
+
+rownames(samples) <- c("Control","Inflammation","No_Inflammation")
+
+samples <- data.frame(t(samples))
+
+```
+
+### The T-Test
+
+One possible multiple hypothesis test that we could use is a T-test to check for significant differences between two of the test conditions. We can try to use the T-test to check for a significant difference between MS brains with and without inflammation firstly.
+
+```{r}
+t.test(Value_Table[11], Value_Table[31])
+```
+
+We can also test the control against MS brains with Inflamattion
+
+```{r}
+t.test(Value_Table[1], Value_Table[11])
+```
+
+As well as the control against MS brains without Inflammation
+
+```{r}
+t.test(Value_Table[1], Value_Table[31])
+```
+
+In all cases, we have that p-value < 2.2e-16, hence using a threshold of even 0.01, we are very confident that the difference in mean between the test conditions are statisically different.
+
+Since we have 3 test conditions to compare, we could have also considered doncuting a the three-way anova, or Ancova, test in R.
+
+## Differentially Expressed Genes
+
+We can generate an MA Plot to have a look at the differentially expressed genes in our samples
+
+```{r}
+plotMA(log2(Value_Table), ylab= "M - ratio log expression",
+       main="MAplot")
+```
+
+Additionally, we can generate a volcano plot of the data by giving the log of the fold changes in expression values, and the associated P_Values for significance.
+
+```{r}
+#volcanoplot(x = log2([Value_Table), y = P_Value_Table)
+```
+
+
+## HeatMap
+
+We can build a heatmap for all genes of significance, by using the the P-Values.
+
+```{r,message=FALSE}
+
+library("ComplexHeatmap")
+library("circlize")
+
+matrix <- Value_Table
+rownames(matrix) <- rownames(supp)
+colnames(matrix) <- colnames(Value_Table)
+
+if(min(matrix) == 0) {
+  heatmap_col = colorRamp2(c(0, max(matrix)), c("white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(matrix), 0, max(matrix)), c("blue", "white", "red"))
+}
+
+heatmap <- Heatmap(as.matrix(matrix),
+                           show_row_dend = TRUE,
+                           show_column_dend = TRUE,
+                           col= heatmap_col,
+                           show_column_names = TRUE,
+                           show_row_names = FALSE,
+                           show_heatmap_legend = TRUE,
+                           row_title = "observed genes",
+                           column_title = "test_samples"
+)
+
+heatmap
+```
+
+## Threshold over-representation Anylsis
+
+For this experiment, I will be using g-Profiler. g.Profiler is a tool that allows for easy manipulation of gene lists and is suitable for this experiment as it consists of high throughput genomic data that analyzes a large set of genes across many sub samples. Additionally, for further analysis, g-profiler can be used to look at gene ontology, enrichments at the gene level and looking at different pathways.
+
+```{r, eval = FALSE, }
+filtered_data_matrix <- as.matrix(supp[2:2203,Values])
+#rownames(filtered_data_matrix) <- supp[2:2203,1]
+d = DGEList(counts=filtered_data_matrix, group=supp[1,Values])
+d = calcNormFactors(d)
+model_design <- model.matrix(~ filtered_data_matrix)
+d <- estimateDisp(d, model_design)
+
+fit <- glmQLFit(d, model_design)
+qlf.pos_vs_neg <- glmQLFTest(fit, model_design)
+
+qlf_output_hits <- topTags(qlf.pos_vs_neg,sort.by = "PValue",
+                           n = nrow(filtered_data_matrix))
+
+length(which(qlf_output_hits$table$PValue < 0.05 
+            & qlf_output_hits$table$logFC > 0))
+
+length(which(qlf_output_hits$table$PValue < 0.05 
+            & qlf_output_hits$table$logFC < 0))
+
+qlf_output_hits_withgn <- merge(ca125_exp[,1:2],qlf_output_hits, by.x=1, by.y = 0)
+qlf_output_hits_withgn[,"rank"] <- -log(qlf_output_hits_withgn$PValue,base =10) * sign(qlf_output_hits_withgn$logFC)
+qlf_output_hits_withgn <- qlf_output_hits_withgn[order(qlf_output_hits_withgn$rank),]
+upregulated_genes <- qlf_output_hits_withgn$gname[  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC > 0)]
+downregulated_genes <- qlf_output_hits_withgn$gname[
+  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC < 0)]
+write.table(x=upregulated_genes,
+            file=file.path("data","ca125_upregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+write.table(x=downregulated_genes,
+            file=file.path("data","ca125_downregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+
+```
+
+In general, we are generate a thresholded list from the list of all genes in our samples as the strong signal may be indicative of genes of significance.
+
+Once we generate a list of up-regulated and down-regulated genes, we can analyze the lists separately, or alotogether, using tools such as g-profiler as previously mentioned.
+
+At a P-value threshhold of P=0.05, there were 655431 observations of significance for the 22303 genes across the 3 conditions (50 samples)
+
+## Interpertation
+
+1. 
+
+Since over representation is most observed in the 2nd condition, MSA brains with increased inflammation, compared to the other two conditions being non neurological control samples, and MSA brains with decreased inflammation, we can say that this observation would support the papers hypothesis that the presence of extended grey matter lesions are more associated with meningeal inflammation. 
+
+The observation of upregulation of such genes and pathways are hence associated with the observed inflammatory response. Furthermore, genes involved in tumour necrosis factor are expected to be further de regulated in the 2nd and 3rd conditions (Brains with MS), compared to the control condition.
+
+2.
+
+In addition to this study, there have been multiple other gene profiling experiments that have arrived at a similair conclusion to the one presented in this paper. 
+
+A study by Hendrickx et al. in 2017, used gene profile expression discovered the up regulation of genes relating to lipid binding, lipid uptake in areas of MS lesion. Additionally, they observed down regulation of scavenger receptors that resulted in reduced myelin uptake.
+
+
+
+
+## References
+
+1. 
+Magliozzi R, Howell OW, Durrenberger P, Aricò E et al. Meningeal     inflammation changes the balance of TNF signalling in cortical grey matter in multiple sclerosis. J Neuroinflammation 2019 Dec 7;16(1):259. PMID: 31810488
+
+2. 
+Hendrickx, Debbie A E et al. “Gene Expression Profiling of Multiple Sclerosis Pathology Identifies Early Patterns of Demyelination Surrounding Chronic Active Lesions.” Frontiers in immunology vol. 8 1810. 21 Dec. 2017, doi:10.3389/fimmu.2017.01810
+
+Note: R code for this report was written following lecture notes in BCB420
