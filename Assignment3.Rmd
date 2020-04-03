@@ -1,0 +1,267 @@
+---
+title: "Assignment 3"
+author: "Arshia Mahmoodi"
+output: html_document
+---
+
+## Assignment 1 and 2 Summary
+
+### Selected dataset [GSE135511](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE135511)
+
+Working with a dataset that documents the pathological changes observed in grey matter in multiple sclerosis with augmented meningeal inflammation, but also demonstrates the actual pathways associated with this inflammatory response. This can be applied to genes involved in tumour signalling, which are are differentially regulated in multiple scleroris cases compared to the control.
+
+We are observing 50 different motor-cortex tissue samples, 10 of which are non neurological control samples, derived from post-mortem multiple sclerosis brains.
+
+Across these samples, 22303 rows of gene expression recorded and their respective value and p-value documented. Hence, the study has very good coverage of the data.
+
+Each row identifer is a unique gene symbol, with the respective tested values across the 50 samples (10 control)
+
+## Loading Required Packages
+
+
+```{r package, message=FALSE}
+
+if (! requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+
+if (! requireNamespace("GEOquery", quietly = TRUE)) {
+    BiocManager::install("GEOquery")
+}
+
+if (!requireNamespace("GEOmetadb", quietly = TRUE)){
+    BiocManager::install("GEOmetadb")
+}
+
+if (!requireNamespace("edgeR", quietly = TRUE)){
+    BiocManager::install("edgeR")
+}
+if (!requireNamespace("ComplexHeatmap")) {
+  BiocManager::install("ComplexHeatmap")
+}
+if (!requireNamespace("circlize")) {
+  BiocManager::install("circlize")
+}
+```
+
+```{r, message=FALSE}
+library(GEOquery)
+
+gse_name <- "GSE135511_RAW.tar"
+
+if (!file.exists(gse_name)){
+  gse <- getGEO("GSE135511", GSEMatrix = FALSE)
+}
+
+current_gpl <- names(GPLList(gse))[1]
+current_gpl_info <- Meta(getGEO(current_gpl))
+```
+
+**Exiperiment title:** 	Transcriptional signature of Th17 cells expressing ICOS-based CARs
+
+**Platform title:** `r current_gpl_info$title`
+
+**Submission date** `r current_gpl_info$submission_date`
+
+**Last update date:** `r current_gpl_info$last_update_date`
+
+**Organisms:**  `r current_gpl_info$organism`
+
+**Number of GEO datasets that use this techology:** `r length(current_gpl_info$series_id)`
+
+**Number of GEO samples that use this technology:** `r length(current_gpl_info$sample_id)`
+
+## Regenerating the data from Assignment 1
+
+```{r, message=FALSE}
+library(knitr)
+
+sfiles = getGEOSuppFiles('GSE135511')
+
+fnames = rownames(sfiles)
+
+# Second supplementary file containing non-normalized data
+supp = read.delim(fnames[2],header=TRUE,
+                check.names = FALSE)
+#head(supp)
+kable(supp[1:10,1:10], format = "html")
+```
+
+Dimensions of the data:
+```{r}
+dim(supp)
+```
+
+
+## Non-thresholded Gene set Enrichment Analysis
+
+In Assignment 2, we produced both a upregulated and downregulated gene list using a threshold method and we will compare that against a non-threshhold method performed here.
+
+Previously, in the threshhold over representation analysis I used  g-Profiler. g.Profiler is a tool that allows for easy manipulation of gene lists and is suitable for this experiment as it consists of high throughput genomic data that analyzes a large set of genes across many sub samples. Additionally, for further analysis, g-profiler can be used to look at gene ontology, enrichments at the gene level and looking at different pathways.
+
+```{r, message=FALSE}
+library(edgeR)
+P_Values <- seq(3, 101, 2)
+
+Values <- seq(2,101,2)
+
+cpms = edgeR::cpm(supp[,2:101])
+rownames(cpms) <- supp[,1]
+keep = rowSums(cpms >1) >=3
+supp_filtered = supp[keep,]
+
+filtered_data_matrix <- as.matrix(supp_filtered[,2:51])
+
+d = edgeR::DGEList(counts=filtered_data_matrix, group=supp[1,P_Values])
+
+P_Value_Table <- supp[, P_Values]
+Value_Table <-supp[,Values]
+
+kable(P_Value_Table[1:10,1:50], format = "html")
+
+```
+
+```{r, eval = FALSE}
+filtered_data_matrix <- as.matrix(supp[2:2203,Values])
+#rownames(filtered_data_matrix) <- supp[2:2203,1]
+d = DGEList(counts=filtered_data_matrix, group=supp[1,Values])
+d = calcNormFactors(d)
+model_design <- model.matrix(~ filtered_data_matrix)
+d <- estimateDisp(d, model_design)
+
+fit <- glmQLFit(d, model_design)
+qlf.pos_vs_neg <- glmQLFTest(fit, model_design)
+
+qlf_output_hits <- topTags(qlf.pos_vs_neg,sort.by = "PValue",
+                           n = nrow(filtered_data_matrix))
+
+length(which(qlf_output_hits$table$PValue < 0.05 
+            & qlf_output_hits$table$logFC > 0))
+
+length(which(qlf_output_hits$table$PValue < 0.05 
+            & qlf_output_hits$table$logFC < 0))
+
+qlf_output_hits_withgn <- merge(ca125_exp[,1:2],qlf_output_hits, by.x=1, by.y = 0)
+qlf_output_hits_withgn[,"rank"] <- -log(qlf_output_hits_withgn$PValue,base =10) * sign(qlf_output_hits_withgn$logFC)
+qlf_output_hits_withgn <- qlf_output_hits_withgn[order(qlf_output_hits_withgn$rank),]
+upregulated_genes <- qlf_output_hits_withgn$gname[  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC > 0)]
+downregulated_genes <- qlf_output_hits_withgn$gname[
+  which(qlf_output_hits_withgn$PValue < 0.05 
+             & qlf_output_hits_withgn$logFC < 0)]
+write.table(x=upregulated_genes,
+            file=file.path("data","ca125_upregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+write.table(x=downregulated_genes,
+            file=file.path("data","ca125_downregulated_genes.txt"),sep = "\t",
+            row.names = FALSE,col.names = FALSE,quote = FALSE)
+
+```
+
+
+To conduct non-threshhold gene analyisis I will  be using GSEA v4.0.3 for Windows on my machine.
+
+In order to run GSEA preranked I generated a ranked list, rank.rnk , which is a rank ordered gene list required as input.
+
+When running the analysis however, I run into the following error which I could not resolve.
+
+<Error Details>
+
+---- Full Error Message ----
+The collapsed dataset was empty when used with chip:ftp.broadinstitute.org://pub ...
+
+---- Stack Trace ----
+# of exceptions: 1
+------The collapsed dataset was empty when used with chip:ftp.broadinstitute.org://pub/gsea/annotations_versioned/Human_Agilent_WholeGenome_4x44k_v1_MSigDB.v7.0.chip------
+xtools.api.param.BadParamException: The collapsed dataset was empty when used with chip:ftp.broadinstitute.org://pub/gsea/annotations_versioned/Human_Agilent_WholeGenome_4x44k_v1_MSigDB.v7.0.chip
+	at org.gsea_msigdb.gsea/edu.mit.broad.genome.alg.DatasetGenerators.collapse(DatasetGenerators.java:266)
+	at org.gsea_msigdb.gsea/xtools.gsea.GseaPreranked.getRankedList(GseaPreranked.java:190)
+	at org.gsea_msigdb.gsea/xtools.gsea.GseaPreranked.execute(GseaPreranked.java:92)
+	at org.gsea_msigdb.gsea/edu.mit.broad.xbench.tui.TaskManager$ToolRunnable.run(TaskManager.java:435)
+	at java.base/java.lang.Thread.run(Unknown Source)
+
+Although the analysis is not complete, I would expect the results of the down regulated genes to be similair to what was obtained in the previous assignment, however this may not be the case for the upregulated genes, as in progressive multiple sclerosis it is the upregulated genes that drive meningial inflammation.
+
+This comparison would not be straightforward since previously in assignment 2, we had used gprofiler which is a threshholded anylsis and here gsea is a non-thresholded anylisis.
+
+## Interpertation
+
+The main mechanism disccused in this paper is that the presence of extented subpial grey matter lesions are associated with meningial inflammation. The paper also explores the consequences of the diffusion of certain pro-inflammatory and cytotoxic molecucles which diffuse from the meninges into the grey matter with their gene profiling analysis.
+
+Overall, through gene expression profiling analysis of the motor cortex from 20 post-mortem patients with multiple scleroris, 20 healthy patients as well as 10 non - neurological controls, there is evidence that there are substantial patholigical cell changes in patients with mutltiple sceloris (especially in cases of multiple scleroris with increased meningiel inflammation), but that there is also the upregulation of certain pathways which are associated with the inflammatory response.
+
+It was also found that genes involved in tumour necrosis factor signalling are significantly downregulated in multiple sclerosis cases compared to controls.
+
+Some of these results are also supported by other expression analysis studies in the field, for example a paper at https://www.ncbi.nlm.nih.gov/pubmed/23996595 which outlines gene expression changes in cortical tissues in multiple scleroris brains.
+
+```{r}
+supp_P_values <- supp[2:22303,P_Values]
+supp_values <- supp[2:22303,Values]
+
+
+data2plot <- log2(supp_values)
+
+counts_density <- apply(log2(supp_P_values), 2, density)
+  #calculate the limits across all the samples
+    xlim <- 0; ylim <- 0
+    for (i in 1:length(counts_density)) {
+      xlim <- range(c(xlim, counts_density[[i]]$x)); 
+      ylim <- range(c(ylim, counts_density[[i]]$y))
+    }
+    cols <- rainbow(length(counts_density))
+    ltys <- rep(1, length(counts_density))
+    #plot the first density plot to initialize the plot
+    plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", 
+         ylab="Smoothing density of log2", main="", cex.lab = 0.85)
+    #plot each line
+    for (i in 1:length(counts_density)) lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+    #create legend
+    legend("topright", colnames(data2plot),  
+           col=cols, lty=ltys, cex=0.75, 
+           border ="blue",  text.col = "green4", 
+           merge = TRUE, bg = "gray90")
+```
+
+We can build a heatmap for all genes of significance, by using the the P-Values.
+
+```{r,message=FALSE}
+
+library("ComplexHeatmap")
+library("circlize")
+
+matrix <- Value_Table
+rownames(matrix) <- rownames(supp)
+colnames(matrix) <- colnames(Value_Table)
+
+if(min(matrix) == 0) {
+  heatmap_col = colorRamp2(c(0, max(matrix)), c("white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(matrix), 0, max(matrix)), c("blue", "white", "red"))
+}
+
+heatmap <- Heatmap(as.matrix(matrix),
+                           show_row_dend = TRUE,
+                           show_column_dend = TRUE,
+                           col= heatmap_col,
+                           show_column_names = TRUE,
+                           show_row_names = FALSE,
+                           show_heatmap_legend = TRUE,
+                           row_title = "observed genes",
+                           column_title = "test_samples"
+)
+
+heatmap
+```
+
+## References
+
+1. 
+Magliozzi R, Howell OW, Durrenberger P, Aricò E et al. Meningeal     inflammation changes the balance of TNF signalling in cortical grey matter in multiple sclerosis. J Neuroinflammation 2019 Dec 7;16(1):259. PMID: 31810488
+
+2. 
+Hendrickx, Debbie A E et al. “Gene Expression Profiling of Multiple Sclerosis Pathology Identifies Early Patterns of Demyelination Surrounding Chronic Active Lesions.” Frontiers in immunology vol. 8 1810. 21 Dec. 2017, doi:10.3389/fimmu.2017.01810
+
+3.
+Dutta R. Gene expression changes underlying cortical pathology: clues to understanding neurological disability in multiple sclerosis. Mult Scler. 2013;19(10):1249–1254. doi:10.1177/1352458513500554
+
+Note: R code for this report was written following lecture notes in BCB420
